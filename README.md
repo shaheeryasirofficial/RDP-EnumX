@@ -32,7 +32,7 @@
 - AMSI bypass (reflection)
 - UAC elevation attempt if not already admin
 - Timestamped loot folder on Desktop
-- Plain-text + JSON/CSV output — easy to read & exfiltrate
+- Plain-text + JSON/CSV output easy to read & exfiltrate
 - Designed for **RDP sessions** (user or elevated context)
 
 ### Enumeration & Detection Modules
