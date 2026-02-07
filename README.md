@@ -1,4 +1,4 @@
-<h1 align="center">RDP-Cred-Enum-Toolkit</h1>
+<h1 align="center">RDP-EnumX</h1>
 <p align="center">
   <strong>Lightweight • Menu-Driven • RDP-Focused Credential & Security Enumeration</strong><br>
   Post-exploitation toolkit optimized for interactive Windows RDP sessions.
