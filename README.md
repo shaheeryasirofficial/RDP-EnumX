@@ -21,45 +21,70 @@
 </p>
 
 <div align="center">
-  🔴 Minimal footprint • Living-off-the-land • No binaries • Administrator-friendly
+  🔴 Minimal footprint &nbsp;•&nbsp; Living-off-the-land &nbsp;•&nbsp; No binaries &nbsp;•&nbsp; Administrator-friendly
 </div>
 
 ---
 
 ### Core Features
 
-- Clean interactive menu
-- AMSI bypass (reflection)
-- UAC elevation attempt if not already admin
-- Timestamped loot folder on Desktop
-- Plain-text + JSON/CSV output easy to read & exfiltrate
-- Designed for **RDP sessions** (user or elevated context)
+- Clean interactive menu with live admin/user context indicator
+- AMSI bypass via concatenated reflection avoids plaintext trigger strings
+- Timestamped loot folder under `%TEMP%` lower visibility than Desktop
+- JSON output throughout for easy parsing and exfiltration
+- Admin-required modules skip gracefully in user context rather than erroring
+- Designed for RDP sessions in both user and elevated contexts
 
-### Enumeration & Detection Modules
+---
 
-| #  | Module                                          | Admin? | Main Output File(s)                        | Value / Purpose                              |
-|----|-------------------------------------------------|--------|--------------------------------------------|----------------------------------------------|
-| 1  | Windows Credential Manager                      | —      | `credman.json`, `credman.csv`              | Vault + generic creds                        |
-| 2  | cmdkey saved network credentials                | No     | `cmdkey.json`                              | RDP, WinRM, share logins                     |
-| 3  | Wi-Fi profiles + cleartext passwords            | No     | `wifi.json`                                | Wi-Fi keys                                   |
-| 4  | Saved RDP connections & credential blobs        | No     | `rdp_cred_blobs.json`, `rdp_*.reg.txt`     | RDP history & targets                        |
-| 5  | Browser saved passwords (Chrome/Edge/Firefox)   | No     | `browser_*.sqlite`, `browser_*.json`       | Login data files                             |
-| 6  | LAPS local admin password                       | AD     | `laps.json`                                | ms-Mcs-AdmPwd attribute                      |
-| 7  | Unattended / sysprep files                      | No     | `unattended_*`                             | Deployment remnant credentials               |
-| 8  | SAM / SYSTEM / SECURITY hives                   | Yes    | `sam.hive`, `system.hive`, `security.hive` | NTLM hashes (offline cracking)               |
-| 9  | DPAPI master key locations                      | No     | `dpapi_masterkeys.json`                    | Master keys for credential decryption        |
-| 10 | Scheduled Tasks with stored credentials         | No     | `scheduled_tasks_creds.json`               | Tasks running with saved passwords           |
-|    |                                                 |        |                                            |                                              |
-| 11 | Installed AV / Security Products                | No     | `installed_antivirus.json`                 | Registered AV engines                        |
-| 12 | Quick EDR / AV process & service detection      | No     | `edr_av_processes_services.json`           | Common EDR/AV indicators                     |
-| 13 | Most common EDR drivers & services              | No     | `edr_drivers.json`                         | Kernel-level EDR drivers                     |
-| 14 | Windows Defender status + protections           | No     | `defender_status.json`                     | Real-time, tamper protection, scans          |
-| 15 | Security-related running processes              | No     | `security_related_processes.json`          | EDR/AV process list                          |
-| C  | Clear common event logs                         | Yes    | —                                          | Security, System, Defender, PowerShell logs  |
-| 0  | Exit                                            | —      | —                                          | —                                            |
+### Enumeration Modules
 
-### Quick Start (RDP)
+| # | Module | Admin? | Output | Purpose |
+|---|--------|--------|--------|---------|
+| 1 | Windows Credential Manager | — | `credman.json` | Vault and generic credentials |
+| 2 | cmdkey stored credentials | No | `cmdkey.json` | RDP, WinRM, share logins |
+| 3 | WiFi profiles + cleartext passwords | No | `wifi.json` | WiFi keys across all profiles |
+| 4 | RDP saved creds, history, .rdp files | No | `rdp_credential_blobs.json`, `rdp_history.txt` | Connection history and DPAPI blobs |
+| 5 | Browser files (Chrome/Edge/Brave/Opera/Firefox) | No | `browser_<name>\*` | Login Data, Cookies, Local State, key4.db |
+| 6 | LAPS local admin password | AD | `laps.json` | ms-Mcs-AdmPwd + expiry |
+| 7 | Unattended / sysprep files | No | `unattended_*` | Deployment credential remnants |
+| 8 | SAM / SYSTEM / SECURITY hives | Yes | `*.hive` | Offline NTLM hash extraction |
+| 9 | DPAPI master key locations | No | `dpapi_masterkeys.json` | Master key paths for offline decryption |
+| 10 | Scheduled tasks with stored credentials | No | `scheduled_tasks.json` | Tasks running under non-default accounts |
+| 11 | Services under non-default accounts | No | `services_custom_accounts.json` | Domain/custom service account exposure |
 
-1. Open PowerShell (preferably as Administrator)
-2. Paste the entire script and press Enter
-3. Use the menu: type `1`–`15`, `C`, or `0`
+---
+
+### Recon Modules
+
+| # | Module | Admin? | Output | Purpose |
+|---|--------|--------|--------|---------|
+| 12 | Security posture | No | `security_posture.json` | AV, EDR processes/services/drivers, Defender config, ASR rules plus live console summary |
+| 13 | Accessibility key backdoors | No | `accessibility_backdoors.json` | IFEO debugger entries on sethc, utilman, osk, narrator |
+
+---
+
+### What Changed from v1
+
+- **Removed log clearing** clearing Security/System/Defender logs is a high-confidence SIEM alert and draws more attention than it removes
+- **Removed UAC elevation popup** spawning a hidden elevated PowerShell process is immediately visible and creates an elevation event log entry
+- **Fixed EDR detection logic** original compared process path against a pattern object instead of its string value, producing no results
+- **Fixed DPAPI regex** master key filenames are 36-char GUIDs with hyphens, not 40-char hex strings
+- **Expanded browser collection** now grabs `Local State` (AES encryption key), `Cookies`, and `Web Data` across Chrome, Edge, Brave, Opera, and all Firefox profiles
+- **Output moved to `%TEMP%`** Desktop loot folder is visible to any user on the session; Temp is lower profile
+- **AMSI bypass hardened** split across string concatenation to avoid the bypass itself being caught by AMSI on load
+- **Added module 11** services running under domain or custom accounts are a common path to credential reuse
+- **Added module 13** IFEO accessibility backdoors are a persistence indicator worth checking on any machine you land on
+
+---
+
+### Quick Start
+
+```powershell
+# Run in any PowerShell session on the RDP target
+# Paste full script content and press Enter
+# Or load from file:
+powershell -ep bypass -f recon_toolkit.ps1
+```
+
+Menu accepts `1`–`13` or `0` to exit. Each module reports status inline and writes output to the timestamped folder shown in the menu header.
